@@ -16,7 +16,7 @@ If you are feeling generous and want to contribute financially to help fuel me w
 
 ### **Prerequisites**
 
-- [Node.JS](https://nodejs.org/en/) 14.0.0 or higher.
+- [Node.JS](https://nodejs.org/en/) 15.0.0
 - You will need basic knowledge of node.js and how to navigate via cmd prompt or terminal.
 - Setup a discord bot account and get your bot token. Instructions on this can be found [here](https://discordjs.guide/preparations/setting-up-a-bot-application.html#keeping-your-token-safe).
 
