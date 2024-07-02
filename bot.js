@@ -1,153 +1,219 @@
-require('dotenv').config();
-const Discord = require('discord.js');
+require("dotenv").config();
+const {
+  Client,
+  GatewayIntentBits,
+  Partials,
+  EmbedBuilder,
+} = require("discord.js");
+const {
+  joinVoiceChannel,
+  createAudioPlayer,
+  createAudioResource,
+  AudioPlayerStatus,
+  VoiceConnectionStatus,
+  EndBehaviorType,
+} = require("@discordjs/voice");
 
-const Client = new Discord.Client();
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers,
+  ],
+  partials: [Partials.Message, Partials.Channel, Partials.Reaction],
+});
 
 const { TOKEN } = process.env;
 
-// bot command prefix
-const prefix = 'don!';
+// Bot command prefix
+const prefix = "don!";
 
 let isTalking = false;
-let channel = null;
 let voiceConnection = null;
-let dispatcher = null;
+let player = null;
 let target = null;
 let onOff = true;
 
-// Bot commands. These weren't in the original but I added them quickly just to make the bot
-// easier to use because I'm a nice guy. :)
+// Bot commands
 const Commands = {
-	'target': {
-		help: 'Set the person that Donnie will target. Usage: don!target @ElizaThornberry . Must @ (mention) a valid user. THIS MUST BE A VALID USER, MEANING THE NAME MUST BE HIGHLIGHTED BLUE INDICATING YOU ARE MENTIONING A USER.',
-		execute: async (message) => {
-			if (message.mentions.users.size < 1) {
-				message.reply('Must mention a valid user.');
-			} else {
-				target = message.mentions.users.first().id;
-				checkForUserInVoice();
-				if (!target) {
-					message.reply('Please provide a valid user.')
-				}
-			}
-		}
-	},
-	'stop': {
-		help: 'Turn Donnie off.',
-		execute: () => {
-			if (voiceConnection) {
-				voiceConnection.disconnect();
-			}
-			onOff = false;
-		}
-	},
-	'start': {
-		help: 'Turn Donnie on. ;)',
-		execute: () => {
-			onOff = true;
-			checkForUserInVoice();
-		}
-	},
-	'help': {
-		help: 'List commands for donnie.',
-		execute: (message) => {
-			let helpMessage = new Discord.MessageEmbed()
-			.setTitle('Donnie Bot Help');
+  target: {
+    help: "Set the person that Donnie will target. Usage: don!target @User",
+    execute: async (message) => {
+      if (message.mentions.users.size < 1) {
+        message.reply("Must mention a valid user.");
+      } else {
+        target = message.mentions.users.first().id;
+        message.reply(
+          `Target set to ${message.mentions.users.first().username}`
+        );
+        checkForUserInVoice(message);
+      }
+    },
+  },
+  stop: {
+    help: "Turn Donnie off.",
+    execute: () => {
+      if (voiceConnection) {
+        voiceConnection.destroy();
+      }
+      onOff = false;
+    },
+  },
+  start: {
+    help: "Turn Donnie on.",
+    execute: () => {
+      onOff = true;
+    },
+  },
+  join: {
+    help: "Make the bot join the General voice channel.",
+    execute: async (message) => {
+      const channel = message.guild.channels.cache.find(
+        (ch) => ch.name === "General" && ch.type === 2
+      ); // 2 is the type for voice channels
+      if (!channel) {
+        message.reply("General voice channel not found!");
+        return;
+      }
+      joinChannel(channel);
+      message.reply("Joined the General voice channel!");
+    },
+  },
+  help: {
+    help: "List commands for Donnie.",
+    execute: (message) => {
+      const helpMessage = new EmbedBuilder().setTitle("Donnie Bot Help");
 
-			for (key in Commands) {
-				helpMessage.addField(`${prefix}${key}`, Commands[key].help);
-			}
-			message.reply(helpMessage);
-		}
-	}
-}
+      for (const key in Commands) {
+        helpMessage.addFields({
+          name: `${prefix}${key}`,
+          value: Commands[key].help,
+        });
+      }
+      message.reply({ embeds: [helpMessage] });
+    },
+  },
+};
 
 // Client ready up handler
-Client.on('ready', () => {
-	console.log('Sheeeshhhhhhhhhhhh');
+client.on("ready", () => {
+  console.log("Sheeeshhhhhhhhhhhh");
 });
 
-// Message handler, did this and the commands in a hurry just to 
-// make it simpler to use for non programming people.
-Client.on('message', (message) => {
-	let content = message.content;
-	if (content.startsWith(prefix)) {
-		let cmd = content.substr(prefix.length).split(' ')[0];
-		if (Commands[cmd]) {
-			Commands[cmd].execute(message);
-		} else {
-			message.reply('Command not found, use "don!help" to see commands.');
-		}
-	}
+// Message handler
+client.on("messageCreate", (message) => {
+  if (message.content.startsWith(prefix)) {
+    const cmd = message.content.substr(prefix.length).split(" ")[0];
+    if (Commands[cmd]) {
+      Commands[cmd].execute(message);
+    } else {
+      message.reply('Command not found, use "don!help" to see commands.');
+    }
+  }
 });
 
-// When user in guild joins a voice channel, check if it is
-// the target and if so join the channel with the target. Likewise
-// if the target leaves the voice channel so will the bot.
-Client.on('voiceStateUpdate', async (oldState, newState) => {
-	if (oldState.id === target && newState.id === target && onOff) {
-		if (oldState.channelID === null) {
-			channel = await Client.channels.fetch(newState.channelID);
-			channel.join().then((connection) => {
-				voiceConnection = connection;
-			});
-		}
-		if (oldState.channelID != null && newState.channel === null && voiceConnection != null) {
-			channel.leave();
-		}
-		if (oldState.channelID != null && newState.channel != null) {
-			channel = await Client.channels.fetch(newState.channelID);
-			channel.join().then((connection) => {
-				voiceConnection = connection;
-			});
-		}
-	}
+// When user in guild joins a voice channel, check if it is the target
+client.on("voiceStateUpdate", async (oldState, newState) => {
+  if (newState.id === target && onOff) {
+    if (
+      newState.channelId !== null &&
+      oldState.channelId !== newState.channelId
+    ) {
+      const channel = await client.channels.fetch(newState.channelId);
+      joinChannel(channel);
+    } else if (
+      oldState.channelId !== null &&
+      newState.channelId === null &&
+      voiceConnection != null
+    ) {
+      voiceConnection.destroy();
+      voiceConnection = null;
+    }
+  }
 });
 
-// When guild member is speaking check if it is the targeted member
-// check to see if donnie is already talking and if not make donnie speak
-// when member 
-Client.on('guildMemberSpeaking', (member, speaking) => {
-	if (member.id === target) {
-		if (speaking.bitfield === 1 && voiceConnection.speaking.bitfield === 0) {
-			play(voiceConnection);
-			isTalking = true;
-		}
-		if (speaking.bitfield === 0) {
-			dispatcher.end();
-			isTalking = false;
-		}
-	}
+// This function plays the Donnie audio
+const play = () => {
+  if (!voiceConnection) return;
+
+  const resource = createAudioResource("./donnie.mp3");
+  player = createAudioPlayer();
+
+  player.play(resource);
+  voiceConnection.subscribe(player);
+
+  player.on(AudioPlayerStatus.Idle, () => {
+    if (isTalking) {
+      play();
+    }
+  });
+
+  player.on("error", (error) => {
+    console.error(`Error: ${error.message}`);
+  });
+};
+
+// Check if target is in voice and join/disconnect accordingly
+const checkForUserInVoice = async (message) => {
+  const vcs = client.channels.cache.filter((c) => c.type === 2); // 2 is the type for voice channels
+
+  for (const [key, value] of vcs) {
+    if (value.members.has(target)) {
+      joinChannel(value);
+      return;
+    }
+  }
+  if (voiceConnection) {
+    voiceConnection.destroy();
+  }
+};
+
+// Join a voice channel and setup speaking event listeners
+const joinChannel = (channel) => {
+  voiceConnection = joinVoiceChannel({
+    channelId: channel.id,
+    guildId: channel.guild.id,
+    adapterCreator: channel.guild.voiceAdapterCreator,
+  });
+
+  voiceConnection.on(VoiceConnectionStatus.Ready, () => {
+    console.log("The bot has connected to the channel!");
+    const receiver = voiceConnection.receiver;
+
+    receiver.speaking.on("start", (userId) => {
+      if (userId === target && onOff) {
+        if (!isTalking) {
+          isTalking = true;
+          play();
+        }
+      }
+    });
+
+    receiver.speaking.on("end", (userId) => {
+      if (userId === target && onOff) {
+        if (isTalking) {
+          isTalking = false;
+          player.stop();
+        }
+      }
+    });
+  });
+
+  voiceConnection.on("error", (error) => {
+    console.error(`Connection error: ${error.message}`);
+  });
+};
+
+// Handle unhandled promise rejections and other errors
+process.on("unhandledRejection", (error) => {
+  console.error("Unhandled promise rejection:", error);
 });
 
-// This function plays the donnie audio 
-// it will recursively play while the target
-// is still speaking.
-const play = (connection) => {
-	dispatcher = connection.play('./donnie.mp3')
-	.on('finish', () => {
-		if (isTalking) {
-			play(connection)
-		}
-	});
-}
+client.on("error", (error) => {
+  console.error("Client error:", error);
+});
 
-// check if target is in voice and join and disconnect if voiceConnection is active
-// but target is not in voice.
-const checkForUserInVoice = () => {
-	let vcs = Client.channels.cache.filter(c => c.type === 'voice');
-
-	for (const [key,value] of vcs) {
-		if (value.members.has(target)) {
-			channel = value;
-			channel.join().then(connection => voiceConnection = connection);
-			return;
-		}
-	}
-	if (voiceConnection) {
-		voiceConnection.disconnect();
-	}
-}
-
-// login using bot api token
-Client.login(TOKEN);
+// Login using bot API token
+client.login(TOKEN);
